@@ -85,6 +85,7 @@
   </div>
   <div class="subline" id="subline"><span class="live">● live</span> · verbinden…</div>
   <div id="content"></div>
+  <div id="devices"></div>
   <div class="foot">🔒 Volledig anoniem · geen persoonlijke data · alleen als de gebruiker "anonymous stats" zelf aanzet</div>
 </div>
 
@@ -96,7 +97,7 @@
   const refreshBtn = document.getElementById('refreshBtn');
 
   const esc = (s) => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-  const pct = (r) => (!r || r.rate === null) ? '—' : Math.round(r.rate * 100) + '%';
+  const pct = (r) => (!r || r.rate === null) ? 'nog niets' : Math.round(r.rate * 100) + '%';
   const mean = (a) => a.length ? a.reduce((p, c) => p + c, 0) / a.length : 0;
 
   function timeAgo(ts){
@@ -147,14 +148,14 @@
       const a2 = mean(last.slice(-3).map(x => x.avg));
       if (a1 > 0) {
         const chg = Math.round((a2 - a1) / a1 * 100);
-        if (chg < 0) callout = '▼ ' + Math.abs(chg) + '% sinds week 1 — mensen gaan mínder vaak online';
+        if (chg < 0) callout = '▼ ' + Math.abs(chg) + '% sinds week 1, mensen gaan minder vaak online';
         else if (chg > 0) callout = '▲ ' + chg + '% sinds week 1';
       }
     }
 
     const rrow = (label, r) => {
       const w = (!r || r.rate === null) ? 0 : Math.round(r.rate * 100);
-      const val = (!r || r.rate === null) ? '—' : w + '%';
+      const val = (!r || r.rate === null) ? 'nog niets' : w + '%';
       const col = (r && r.rate !== null && r.n === 30) ? 'var(--good)' : 'var(--petrol)';
       return '<div class="rrow"><div class="rlab">' + label + '</div><div class="rtrack"><div class="rfill" style="width:' +
         w + '%;background:' + col + '"></div></div><div class="rval">' + val + '</div></div>';
@@ -174,9 +175,9 @@
           '<div class="ey">De kill-metric · 30-dagen retentie</div>' +
           '<div class="herorow"><div class="big">' + pct(d30) + '</div><div class="badge ' + statusClass + '">● ' + status + '</div></div>' +
           '<div class="hint">Van de mensen die ≥30 dagen geleden begonnen, houdt <b>' + pct(d30) + '</b> Mona nog áán' +
-            (d30 && d30.eligible ? ' (' + d30.retained + '/' + d30.eligible + ').' : ' — nog te weinig toestellen ouder dan 30 dagen om te meten.') + '</div>' +
+            (d30 && d30.eligible ? ' (' + d30.retained + '/' + d30.eligible + ').' : '. Nog te weinig toestellen ouder dan 30 dagen om te meten.') + '</div>' +
           '<div class="legend"><span><i class="sw" style="background:var(--good)"></i> GEZOND ≥40%</span>' +
-            '<span><i class="sw" style="background:var(--honey)"></i> OK 25–40%</span>' +
+            '<span><i class="sw" style="background:var(--honey)"></i> OK 25 tot 40%</span>' +
             '<span><i class="sw" style="background:var(--coral)"></i> STOP &lt;25%</span></div>' +
         '</div>' +
         '<div class="tiles">' +
@@ -186,7 +187,7 @@
         '</div>' +
         trendCard +
         '<div class="card full">' +
-          '<div class="ey">Retentie met Mona áán — na hoeveel dagen</div>' +
+          '<div class="ey">Retentie met Mona áán, na hoeveel dagen</div>' +
           rrow('7 dgn', d7) + rrow('14 dgn', d14) + rrow('30 dgn', d30) +
         '</div>' +
       '</div>';
@@ -241,8 +242,42 @@
     }
   }
 
-  refreshBtn.addEventListener('click', load);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+  /* Toestellenlijst: zien welke ids rommel zijn zonder de sheet in te duiken.
+     Werkt alleen als het Apps Script format=devices kent; zo niet blijft dit leeg. */
+  const JUNK = ["m1","mdemo","mdemo1"];
+  const devBox = document.getElementById("devices");
+  function todayStr(){ return new Date().toISOString().slice(0,10); }
+  function renderDevices(list){
+    if (!list || !list.length) { devBox.innerHTML=""; return; }
+    const t = todayStr();
+    const rows = list.slice().sort(function(a,b){ return a.last < b.last ? 1 : -1; }).slice(0,80);
+    const stale = rows.filter(function(d){ return JUNK.indexOf(d.id) >= 0 || d.last !== t; }).length;
+    devBox.innerHTML =
+      '<div class="card full" style="margin-top:14px">' +
+        '<div class="ey">Toestellen, nieuwste eerst</div>' +
+        '<div class="hint" style="margin-top:8px">' + rows.length + " ids. " +
+          (stale ? "<b>" + stale + "</b> zijn vandaag niet gezien of komen uit een test, en zijn kandidaat om op te ruimen." : "Alles is vandaag gezien.") +
+        '</div><div style="margin-top:12px">' +
+        rows.map(function(d){
+          const junk = JUNK.indexOf(d.id) >= 0 || d.last !== t;
+          return '<div style="display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid var(--line);font-size:12.5px' +
+            (junk ? ";opacity:.55" : "") + '">' +
+            '<span style="font-family:monospace">' + d.id + (junk ? " *" : "") + '</span>' +
+            '<span style="color:var(--mute)">' + d.first + " tot " + d.last + " . " + d.pings + 'x</span></div>';
+        }).join("") +
+        "</div></div>";
+  }
+  async function loadDevices(){
+    try {
+      const res = await fetch(ENDPOINT + "?format=devices", { cache: "no-store" });
+      const data = await res.json();
+      if (data && data.ok && data.devices) renderDevices(data.devices);
+    } catch(e){ }
+  }
+
+  refreshBtn.addEventListener('click', function(){ load(); loadDevices(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { load(); loadDevices(); } });
+  loadDevices();
   window.addEventListener('online', load);
   load();
 
