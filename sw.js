@@ -1,5 +1,16 @@
-/* Mona Stats — service worker: offline app-shell + network-first live data. */
-const SHELL = 'mona-shell-v1';
+/* Mona Stats service worker.
+ *
+ * v1 was cache-first met een vaste cachenaam. Gevolg: zodra index.html een keer in de cache
+ * zat, kreeg je die versie voor altijd. Een nieuwe pagina op GitHub Pages werd nooit zichtbaar,
+ * hoe vaak je de app ook afsloot, want de service worker zelf veranderde niet en installeerde
+ * dus ook nooit opnieuw.
+ *
+ * v2 doet twee dingen anders. De cachenaam is opgehoogd, waardoor deze worker installeert en
+ * de oude cache weggooit. En de pagina zelf wordt network-first opgehaald: online zie je altijd
+ * de nieuwste versie, offline val je terug op de laatst opgeslagen versie. De iconen blijven
+ * cache-first, want die veranderen zelden en mogen direct laden.
+ */
+const SHELL = 'mona-shell-v2';
 const SHELL_FILES = [
   './index.html',
   './manifest.webmanifest',
@@ -21,13 +32,34 @@ self.addEventListener('activate', (e) => {
   );
 });
 
+function isDocument(req) {
+  return req.mode === 'navigate' || (req.destination === 'document') ||
+         (req.headers.get('accept') || '').indexOf('text/html') !== -1;
+}
+
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  // Live data (Apps Script): network-first, no offline caching here (JS keeps last-good in localStorage).
+
+  // Live cijfers uit het Apps Script: laat de pagina dat zelf afhandelen.
   if (url.hostname.indexOf('script.google') !== -1 || url.hostname.indexOf('googleusercontent') !== -1) {
-    return; // let the page's fetch handle it directly
+    return;
   }
-  // App shell: cache-first so the app opens instantly & offline.
+
+  // De pagina zelf: eerst het net, dan pas de cache. Zo is een update meteen zichtbaar.
+  if (isDocument(e.request)) {
+    e.respondWith(
+      fetch(e.request, { cache: 'no-store' }).then((res) => {
+        if (res && res.status === 200) {
+          const copy = res.clone();
+          caches.open(SHELL).then((c) => c.put('./index.html', copy));
+        }
+        return res;
+      }).catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
+
+  // Iconen en manifest: cache-first, die mogen direct laden.
   e.respondWith(
     caches.match(e.request).then((hit) => hit || fetch(e.request).then((res) => {
       if (res && res.status === 200 && e.request.method === 'GET') {
@@ -35,6 +67,5 @@ self.addEventListener('fetch', (e) => {
         caches.open(SHELL).then((c) => c.put(e.request, copy));
       }
       return res;
-    }).catch(() => caches.match('./index.html')))
-  );
+    }).catch(() => caches.match('./index.html'))));
 });
