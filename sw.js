@@ -5,12 +5,16 @@
  * hoe vaak je de app ook afsloot, want de service worker zelf veranderde niet en installeerde
  * dus ook nooit opnieuw.
  *
+ * v3 is dezelfde worker als v2, alleen met een nieuwe cachenaam. De iconen worden
+ * cache-first geserveerd, dus een vervangen icoon met dezelfde bestandsnaam bereikt
+ * niemand zolang de oude cache blijft staan. Ophogen dwingt hem opnieuw te installeren.
+ *
  * v2 doet twee dingen anders. De cachenaam is opgehoogd, waardoor deze worker installeert en
  * de oude cache weggooit. En de pagina zelf wordt network-first opgehaald: online zie je altijd
  * de nieuwste versie, offline val je terug op de laatst opgeslagen versie. De iconen blijven
  * cache-first, want die veranderen zelden en mogen direct laden.
  */
-const SHELL = 'mona-shell-v2';
+const SHELL = 'mona-shell-v3';
 const SHELL_FILES = [
   './index.html',
   './manifest.webmanifest',
