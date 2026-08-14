@@ -14,7 +14,7 @@
  * de nieuwste versie, offline val je terug op de laatst opgeslagen versie. De iconen blijven
  * cache-first, want die veranderen zelden en mogen direct laden.
  */
-const SHELL = 'mona-shell-v3';
+const SHELL = 'mona-shell-v4';
 const SHELL_FILES = [
   './index.html',
   './manifest.webmanifest',
