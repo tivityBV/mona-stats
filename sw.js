@@ -14,14 +14,14 @@
  * de nieuwste versie, offline val je terug op de laatst opgeslagen versie. De iconen blijven
  * cache-first, want die veranderen zelden en mogen direct laden.
  */
-const SHELL = 'mona-shell-v4';
+const SHELL = 'mona-shell-v5';
 const SHELL_FILES = [
   './index.html',
   './manifest.webmanifest',
-  './icon-192.png',
-  './icon-512.png',
-  './icon-maskable-512.png',
-  './apple-touch-icon-180.png'
+  './icon-192-v2.png',
+  './icon-512-v2.png',
+  './icon-maskable-512-v2.png',
+  './apple-touch-icon-180-v2.png'
 ];
 
 self.addEventListener('install', (e) => {
