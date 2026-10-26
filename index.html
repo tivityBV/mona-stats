@@ -73,6 +73,12 @@
   .empty p{color:var(--mute);font-size:13.5px;line-height:1.6;max-width:460px;margin:0 auto}
   .dim{color:var(--mute);font-size:12.5px;margin-top:10px}
   .foot{text-align:center;color:var(--mute);font-size:11.5px;margin-top:22px;line-height:1.5}
+  .seg{display:flex;gap:6px;margin:0 0 14px;flex-wrap:wrap}
+  .seg button{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:20px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer}
+  .seg button[aria-pressed="true"]{background:var(--petrol);border-color:var(--petrol);color:var(--ivory)}
+  .seg .n{opacity:.7;font-weight:400;margin-left:4px}
+  .ptag{font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:10px;background:#efe6cf;color:var(--mute);margin-left:6px}
+  .loading{color:var(--mute);font-weight:700}
   .skel{background:linear-gradient(90deg,#f0e7cf 25%,#f7efd9 37%,#f0e7cf 63%);background-size:400% 100%;animation:sh 1.3s ease infinite;border-radius:12px}
   @keyframes sh{0%{background-position:100% 0}100%{background-position:-100% 0}}
 </style>
@@ -87,6 +93,7 @@
     </button>
   </div>
   <div class="subline" id="subline"><span class="live">● live</span> · verbinden…</div>
+  <div class="seg" id="seg" role="group" aria-label="Platform" hidden></div>
   <div id="content"></div>
   <div id="devices"></div>
   <div class="foot">🔒 Volledig anoniem · geen persoonlijke data · alleen als de gebruiker "anonymous stats" zelf aanzet</div>
@@ -98,6 +105,43 @@
   const content = document.getElementById('content');
   const subline = document.getElementById('subline');
   const refreshBtn = document.getElementById('refreshBtn');
+
+  /* Platform: Alles, Android of iOS. Sinds 26 okt 2026 levert Code.gs de samenvatting ook per
+     platform (summary.platforms) en de daggrafiek per platform (daily[].android/.ios). Een
+     oudere Code.gs kent die velden niet: dan blijft de keuzebalk verborgen en toont de app het
+     totaal, zoals altijd. */
+  const PLAT_KEY = "mona-stats-plat";
+  const PLATS = [['all','Alles'],['android','Android'],['ios','iOS']];
+  let PLAT = (() => { try { return localStorage.getItem(PLAT_KEY) || 'all'; } catch(e){ return 'all'; } })();
+  let lastData = null, lastMeta = null, lastDevices = null;
+  const seg = document.getElementById('seg');
+
+  function renderSeg(data){
+    const pl = data && data.summary && data.summary.platforms;
+    if (!pl) { seg.hidden = true; PLAT = 'all'; return; }
+    seg.hidden = false;
+    const count = (k) => k === 'all' ? data.summary.devices : (pl[k] ? pl[k].devices : 0);
+    seg.innerHTML = PLATS.map(([k, label]) =>
+      '<button data-p="' + k + '" aria-pressed="' + (PLAT === k) + '">' + label + '<span class="n">' + count(k) + '</span></button>'
+    ).join('');
+    seg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      PLAT = b.dataset.p;
+      try { localStorage.setItem(PLAT_KEY, PLAT); } catch(e){}
+      if (lastData) renderDashboard(lastData, lastMeta);
+      if (lastDevices) renderDevices(lastDevices);
+    }));
+  }
+
+  /** De gekozen kant van de data: samenvatting en daggrafiek voor Alles, Android of iOS. */
+  function view(data){
+    const all = data.summary || data;
+    const pl = all.platforms;
+    if (PLAT === 'all' || !pl || !pl[PLAT]) return { s: all, series: data.daily || [] };
+    const series = (data.daily || [])
+      .filter(x => x[PLAT] && x[PLAT].n > 0)
+      .map(x => ({ day: x.day, avg: x[PLAT].avg, n: x[PLAT].n }));
+    return { s: pl[PLAT], series };
+  }
 
   const esc = (s) => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
   const pct = (r) => (!r || r.rate === null) ? 'nog niets' : Math.round(r.rate * 100) + '%';
@@ -113,8 +157,9 @@
   }
 
   function renderDashboard(data, meta){
-    const s = data.summary || data;
-    const series = data.daily || [];
+    lastData = data; lastMeta = meta;
+    renderSeg(data);
+    const { s, series } = view(data);
     const d30 = s.retention_d30, d14 = s.retention_d14, d7 = s.retention_d7;
 
     let status, statusClass;
@@ -124,11 +169,24 @@
     else { status = 'STOP'; statusClass = 'b-stop'; }
 
     // subline: live vs cached
-    const stamp = meta && meta.cached
+    // Drie standen. Tot 26 okt stond een bewaarde versie tijdens het laden als "live" in beeld,
+    // met de datum van toen; daardoor leek het dashboard dagen achter te lopen.
+    const stamp = meta && meta.loading
+      ? '<span class="loading">● laden</span> · laatst opgehaald ' + esc(timeAgo(meta.ts))
+      : meta && meta.cached
       ? '<span class="stale">● offline</span> · laatst opgehaald ' + esc(timeAgo(meta.ts))
       : '<span class="live">● live</span> · bijgewerkt ' + esc(s.today || '');
-    subline.innerHTML = stamp + ' · anoniem, opt-in';
+    const ping = (PLAT !== 'all' && s.last_ping)
+      ? ' · laatste ping ' + esc(s.last_ping) + (s.latest_build ? ', build ' + esc(s.latest_build) : '')
+      : '';
+    subline.innerHTML = stamp + ping + ' · anoniem, opt-in';
 
+    if (s.devices === 0 && PLAT !== 'all') {
+      content.innerHTML =
+        '<div class="card full empty"><div class="emoji">📡</div><h2>Nog geen ' + (PLAT === 'ios' ? 'iOS' : 'Android') + '-data</h2>' +
+        '<p>Er heeft nog geen toestel op dit platform de anonieme statistiek aangezet. Testers zetten dat aan bij de stap <b>"Help je MONA beter maken?"</b> of later in de instellingen.</p></div>';
+      return;
+    }
     if (s.devices === 0) {
       content.innerHTML =
         '<div class="card full empty"><div class="emoji">📡</div><h2>Nog geen data</h2>' +
@@ -230,7 +288,7 @@
     loading = true;
     refreshBtn.classList.add('spin');
     const cached = loadCached();
-    if (!content.children.length) { if (cached) renderDashboard(cached.data, {cached:false, ts:cached.ts}); else renderSkeleton(); }
+    if (!content.children.length) { if (cached) renderDashboard(cached.data, {loading:true, ts:cached.ts}); else renderSkeleton(); }
     try {
       const res = await fetch(ENDPOINT + '?format=json', { cache: 'no-store' });
       const data = await res.json();
@@ -255,9 +313,12 @@
   function today(){ return new Date().toISOString().slice(0,10); }
 
   function renderDevices(list){
+    lastDevices = list;
     if (!list || !list.length) { devBox.innerHTML=''; return; }
     const t = today();
-    const rows = list.slice().sort((a,b)=> (a.last < b.last ? 1 : -1)).slice(0,80);
+    const mine = PLAT === 'all' ? list : list.filter(d => (d.p || 'android') === PLAT);
+    if (!mine.length) { devBox.innerHTML=''; return; }
+    const rows = mine.slice().sort((a,b)=> (a.last < b.last ? 1 : -1)).slice(0,80);
     const stale = rows.filter(d => JUNK.indexOf(d.id) >= 0 || d.last !== t).length;
     devBox.innerHTML =
       '<div class="card full" style="margin-top:14px">' +
@@ -270,8 +331,9 @@
           const junk = JUNK.indexOf(d.id) >= 0 || d.last !== t;
           return '<div style="display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid var(--line);font-size:12.5px' +
             (junk ? ';opacity:.55' : '') + '">' +
-            '<span style="font-family:monospace">' + d.id + (junk ? ' ●' : '') + '</span>' +
-            '<span style="color:var(--mute)">' + d.first + ' tot ' + d.last + ' · ' + d.pings + 'x</span>' +
+            '<span style="font-family:monospace">' + esc(d.id) + (junk ? ' ●' : '') +
+              (d.p ? '<span class="ptag">' + (d.p === 'ios' ? 'iOS' : 'Android') + (d.v ? ' ' + esc(d.v) : '') + '</span>' : '') + '</span>' +
+            '<span style="color:var(--mute)">' + esc(d.first) + ' tot ' + esc(d.last) + ' · ' + esc(d.pings) + 'x</span>' +
           '</div>';
         }).join('') +
         '</div>' +
