@@ -38,6 +38,7 @@
   .stale{color:var(--coral);font-weight:700}
   .grid{display:grid;grid-template-columns:1.15fr 1fr;gap:14px}
   @media(max-width:760px){.grid{grid-template-columns:1fr}}
+  .grid>*{min-width:0}   /* anders duwt de brede verloopgrafiek de kaart, en dus de pagina, breder dan het scherm */
   .card{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:18px 20px}
   .full{grid-column:1 / -1}
   .ey{font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:var(--mute);font-weight:600}
@@ -59,6 +60,20 @@
   .tlab{font-size:12.5px;color:var(--mute);line-height:1.35}
   .trendhead{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:6px}
   .callout{color:var(--good);font-weight:700;font-size:13px}
+  .callout.up{color:#b9791f}
+  .callout.flat{color:var(--mute)}
+  .verloop{margin-top:14px;overflow-x:auto}
+  .verloop svg{width:100%;min-width:520px;height:auto;display:block}
+  .band{stroke:#d9cba9;stroke-width:1;stroke-dasharray:4 4}
+  .ax{font-size:11px;fill:var(--mute)}
+  .l30{fill:none;stroke:var(--petrol);stroke-width:2.6;stroke-linejoin:round}
+  .l7{fill:none;stroke:var(--honey);stroke-width:1.6;stroke-linejoin:round;opacity:.85}
+  .mark{stroke:var(--mute);stroke-width:1;stroke-dasharray:2 3}
+  .markdot{fill:var(--surface);stroke:var(--mute);stroke-width:1}
+  .marknr{font-size:10px;font-weight:700;fill:var(--ink)}
+  .vast{stroke:var(--good);stroke-width:1.2}
+  .endpt{fill:var(--petrol);stroke:var(--surface);stroke-width:2}
+  .endlab{font-size:12px;font-weight:700;fill:var(--ink)}
   .chart{display:flex;align-items:flex-end;gap:4px;height:150px;margin-top:16px;border-bottom:1px solid var(--line)}
   .bar{flex:1;background:#e4d3ab;border-radius:4px 4px 0 0;min-height:3px}
   .bar.last{background:var(--honey)}
@@ -145,7 +160,6 @@
 
   const esc = (s) => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
   const pct = (r) => (!r || r.rate === null) ? 'nog niets' : Math.round(r.rate * 100) + '%';
-  const mean = (a) => a.length ? a.reduce((p, c) => p + c, 0) / a.length : 0;
 
   function timeAgo(ts){
     if(!ts) return '';
@@ -156,17 +170,128 @@
     return Math.round(h/24) + ' dagen geleden';
   }
 
+  /* De regel boven de inbelgrafiek. Zelfde logica als trendCallout() in Code.gs (27 okt
+     2026): de laatste 7 dagen tegenover de 7 dagen twee weken eerder, gewogen naar het
+     aantal toestellen, en alleen als er in allebei op minstens één dag 3 toestellen waren.
+     Tot dan vergeleek deze app de eerste 7 met alleen de laatste 3 dagen, op cijfers die het
+     moment van de ping maten (punt 16c), met de tekst "mensen gaan minder vaak online". */
+  function trendCallout(series){
+    const last = series.slice(-21);
+    if (last.length < 14) return null;
+    const win = (xs) => {
+      let sum = 0, n = 0, maxn = 0;
+      xs.forEach(x => { const k = x.n || 0; sum += x.avg * k; n += k; if (k > maxn) maxn = k; });
+      return { avg: n ? sum / n : 0, maxn };
+    };
+    const a = win(last.slice(0, 7)), b = win(last.slice(-7));
+    if (a.maxn < 3 || b.maxn < 3 || a.avg <= 0) return null;
+    const chg = Math.round((b.avg - a.avg) / a.avg * 100);
+    const who = ' (' + b.maxn + ' toestellen)';
+    if (chg <= -1) return { text: '▼ ' + Math.abs(chg) + '% minder inbellen dan twee weken eerder' + who, cls: 'callout' };
+    if (chg >= 1) return { text: '▲ ' + chg + '% vaker inbellen dan twee weken eerder' + who, cls: 'callout up' };
+    return { text: 'Even vaak inbellen als twee weken eerder' + who, cls: 'callout flat' };
+  }
+
+  /* Het verloop van de retentie door de tijd, uit 'history' (Code.gs Versie 10 en later).
+     Bij Alles: d30 en d7. Per platform levert Code.gs alleen d30, dus dan alleen die lijn.
+     Kent het Apps Script 'history' nog niet, dan blijft de kaart weg. */
+  const DAY = 864e5;
+  const dd = (a, b) => Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / DAY);
+  const plus = (day, n) => { const d = new Date(day + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const MAANDEN = ['jan','feb','mrt','apr','mei','jun','jul','aug','sep','okt','nov','dec'];
+  const dag = (day) => Number(day.slice(8)) + ' ' + MAANDEN[Number(day.slice(5, 7)) - 1];
+
+  function verloopCard(data){
+    if (!Array.isArray(data.history)) return '';
+    const plat = PLAT !== 'all';
+    const r30 = (h) => plat ? (h[PLAT] && h[PLAT].d30) : h.d30;
+    const r7 = (h) => plat ? null : h.d7;
+    const rate = (r) => (r && r.eligible) ? r.retained / r.eligible : null;
+    const pts = data.history.filter(h => rate(r30(h)) !== null || rate(r7(h)) !== null);
+    const head = '<div class="card full"><div class="ey">Verloop · retentie per dag sinds de start' +
+      (plat ? ' · ' + (PLAT === 'ios' ? 'iOS' : 'Android') : '') + '</div>';
+    if (pts.length < 2) {
+      return head + '<p class="dim">' + (data.history.length
+        ? 'Nog te weinig dagen met genoeg toestellen om een lijn te tekenen.'
+        : 'Nog geen verloop. Draai één keer terugrekenen() in de Apps Script-editor; daarna komt er elke nacht een dag bij.') +
+        '</p></div>';
+    }
+    const W = 900, H = 230, L = 40, R = 14, T = 26, B = 26;
+    const d0 = pts[0].day, dN = pts[pts.length - 1].day, span = Math.max(1, dd(d0, dN));
+    let maxv = 0.6;
+    pts.forEach(p => [rate(r7(p)), rate(r30(p))].forEach(v => { if (v !== null && v + 0.05 > maxv) maxv = Math.min(1, v + 0.05); }));
+    const x = (day) => L + (W - L - R) * dd(d0, day) / span;
+    const y = (v) => T + (H - T - B) * (1 - v / maxv);
+    const line = (get, cls) => {
+      const segs = []; let cur = [];
+      pts.forEach(p => {
+        const v = rate(get(p));
+        if (v === null) { if (cur.length) segs.push(cur); cur = []; return; }
+        cur.push(x(p.day).toFixed(1) + ',' + y(v).toFixed(1));
+      });
+      if (cur.length) segs.push(cur);
+      return segs.map(sg => '<polyline class="' + cls + '" points="' + sg.join(' ') + '"/>').join('');
+    };
+    let g = '';
+    [0.10, 0.20, 0.35].forEach(b => {
+      const yy = y(b).toFixed(1);
+      g += '<line class="band" x1="' + L + '" x2="' + (W - R) + '" y1="' + yy + '" y2="' + yy + '"/>' +
+           '<text class="ax" x="' + (L - 6) + '" y="' + (Number(yy) + 4) + '" text-anchor="end">' + Math.round(b * 100) + '%</text>';
+    });
+    for (let d = d0; d <= dN; d = plus(d, 1)) {
+      if (d.slice(8) === '01' || d === d0) g += '<text class="ax" x="' + x(d).toFixed(1) + '" y="' + (H - 6) + '" text-anchor="middle">' + dag(d) + '</text>';
+    }
+    let nr = 0; const legenda = [];
+    (Array.isArray(data.meetversies) ? data.meetversies : []).forEach(m => {
+      if (!m || !m.vanaf || m.vanaf <= d0 || m.vanaf > dN) return;
+      nr++;
+      const xx = x(m.vanaf).toFixed(1);
+      g += '<line class="mark" x1="' + xx + '" x2="' + xx + '" y1="' + (T - 8) + '" y2="' + (H - B) + '"/>' +
+           '<circle class="markdot" cx="' + xx + '" cy="' + (T - 14) + '" r="8"/>' +
+           '<text class="marknr" x="' + xx + '" y="' + (T - 10.5) + '" text-anchor="middle">' + nr + '</text>';
+      legenda.push('<span><b>' + nr + '</b> ' + dag(m.vanaf) + ': ' + esc(m.tekst || '') + '</span>');
+    });
+    const vast = pts.find(p => p.soort === 'vastgelegd');
+    if (vast && vast.day > d0) {
+      const xv = x(vast.day);
+      g += '<line class="vast" x1="' + xv.toFixed(1) + '" x2="' + xv.toFixed(1) + '" y1="' + T + '" y2="' + (H - B) + '"/>' +
+        (xv > W * 0.6
+          ? '<text class="ax" x="' + (xv - 4).toFixed(1) + '" y="' + (T + 10) + '" text-anchor="end">vastgelegd vanaf hier</text>'
+          : '<text class="ax" x="' + (xv + 4).toFixed(1) + '" y="' + (T + 10) + '">vanaf hier vastgelegd</text>');
+    }
+    let lastP = null;
+    pts.forEach(p => { if (rate(r30(p)) !== null) lastP = p; });
+    if (lastP) {
+      const r = r30(lastP), lv = rate(r);
+      g += '<circle class="endpt" cx="' + x(lastP.day).toFixed(1) + '" cy="' + y(lv).toFixed(1) + '" r="4.5"/>' +
+           '<text class="endlab" x="' + (x(lastP.day) - 8).toFixed(1) + '" y="' + (y(lv) - 9).toFixed(1) + '" text-anchor="end">d30 ' +
+           Math.round(lv * 100) + '% (' + r.retained + '/' + r.eligible + ')</text>';
+    }
+    return head +
+      '<div class="verloop"><svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Verloop van de retentie per dag">' +
+        g + (plat ? '' : line(r7, 'l7')) + line(r30, 'l30') + '</svg></div>' +
+      '<div class="legend"><span><i class="sw" style="background:var(--petrol)"></i> 30 dagen</span>' +
+        (plat ? '' : '<span><i class="sw" style="background:var(--honey)"></i> 7 dagen</span>') +
+        '<span>stippellijnen: de grenzen uit PRODUCT-DIRECTION.md</span></div>' +
+      (legenda.length ? '<div class="legend">' + legenda.join('') + '</div>' : '') +
+    '</div>';
+  }
+
   function renderDashboard(data, meta){
     lastData = data; lastMeta = meta;
     renderSeg(data);
     const { s, series } = view(data);
     const d30 = s.retention_d30, d14 = s.retention_d14, d7 = s.retention_d7;
 
+    // Banden uit PRODUCT-DIRECTION.md sectie 6, de kill-criteria, gelijk aan het dashboard
+    // in Code.gs sinds 23 sep 2026. Deze app hield tot 27 okt 2026 de oude, strengere tabel
+    // (GEZOND vanaf 40, OK vanaf 25, anders STOP), waardoor hetzelfde cijfer hier anders heette.
     let status, statusClass;
     if (!d30 || d30.rate === null) { status = 'NOG TE VROEG'; statusClass = 'b-none'; }
-    else if (d30.rate >= 0.40) { status = 'GEZOND'; statusClass = 'b-good'; }
-    else if (d30.rate >= 0.25) { status = 'OK'; statusClass = 'b-ok'; }
-    else { status = 'STOP'; statusClass = 'b-stop'; }
+    else if (d30.rate > 0.35) { status = 'OPTIMISTISCH'; statusClass = 'b-good'; }
+    else if (d30.rate >= 0.20) { status = 'VEELBELOVEND'; statusClass = 'b-good'; }
+    else if (d30.rate >= 0.10) { status = 'PRIL'; statusClass = 'b-ok'; }
+    else { status = 'TWIJFEL'; statusClass = 'b-stop'; }
 
     // subline: live vs cached
     // Drie standen. Tot 26 okt stond een bewaarde versie tijdens het laden als "live" in beeld,
@@ -203,16 +328,7 @@
       return '<div class="bar' + (i === last.length - 1 ? ' last' : '') + '" style="height:' + h + '%" title="' +
         esc(x.day) + ': ' + x.avg.toFixed(1) + ' dial-ins"></div>';
     }).join('');
-    let callout = '';
-    if (last.length >= 6) {
-      const a1 = mean(last.slice(0, 7).map(x => x.avg));
-      const a2 = mean(last.slice(-3).map(x => x.avg));
-      if (a1 > 0) {
-        const chg = Math.round((a2 - a1) / a1 * 100);
-        if (chg < 0) callout = '▼ ' + Math.abs(chg) + '% sinds week 1, mensen gaan minder vaak online';
-        else if (chg > 0) callout = '▲ ' + chg + '% sinds week 1';
-      }
-    }
+    const callout = trendCallout(series);
 
     const rrow = (label, r) => {
       const w = (!r || r.rate === null) ? 0 : Math.round(r.rate * 100);
@@ -224,9 +340,10 @@
 
     const trendCard = series.length
       ? '<div class="card full">' +
-          '<div class="trendhead"><div class="ey">Gemiddelde dial-ins per dag · laatste ' + last.length + ' dagen</div>' +
-            (callout ? '<div class="callout">' + callout + '</div>' : '') + '</div>' +
+          '<div class="trendhead"><div class="ey">Gemiddeld inbellen per toestel per dag · laatste ' + last.length + ' dagen</div>' +
+            (callout ? '<div class="' + callout.cls + '">' + esc(callout.text) + '</div>' : '') + '</div>' +
           (last.length ? '<div class="chart">' + bars + '</div>' : '<p class="dim">Nog te weinig dagen om een trend te tonen.</p>') +
+          '<p class="dim">Gemeten met wat de app de dag erna als "gisteren" doorgeeft. De laatste staaf is gisteren.</p>' +
         '</div>'
       : '';
 
@@ -237,9 +354,9 @@
           '<div class="herorow"><div class="big">' + pct(d30) + '</div><div class="badge ' + statusClass + '">● ' + status + '</div></div>' +
           '<div class="hint">Van de mensen die ≥30 dagen geleden begonnen, houdt <b>' + pct(d30) + '</b> Mona nog áán' +
             (d30 && d30.eligible ? ' (' + d30.retained + '/' + d30.eligible + ').' : '. Nog te weinig toestellen ouder dan 30 dagen om te meten.') + '</div>' +
-          '<div class="legend"><span><i class="sw" style="background:var(--good)"></i> GEZOND ≥40%</span>' +
-            '<span><i class="sw" style="background:var(--honey)"></i> OK 25 tot 40%</span>' +
-            '<span><i class="sw" style="background:var(--coral)"></i> STOP &lt;25%</span></div>' +
+          '<div class="legend"><span><i class="sw" style="background:var(--good)"></i> ≥20% veelbelovend, &gt;35% optimistisch</span>' +
+            '<span><i class="sw" style="background:var(--honey)"></i> 10 tot 20% pril</span>' +
+            '<span><i class="sw" style="background:var(--coral)"></i> &lt;10% twijfel</span></div>' +
         '</div>' +
         '<div class="tiles">' +
           '<div class="tile"><div class="tnum">' + s.devices + '</div><div class="tlab">toestellen<br>delen data</div></div>' +
@@ -251,6 +368,7 @@
           '<div class="ey">Retentie met Mona áán, na hoeveel dagen</div>' +
           rrow('7 dgn', d7) + rrow('14 dgn', d14) + rrow('30 dgn', d30) +
         '</div>' +
+        verloopCard(data) +
       '</div>';
   }
 
