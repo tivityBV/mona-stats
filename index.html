@@ -304,9 +304,13 @@
   }
 
   /* ---------------------------------------------------------------- toestellen
-     Leest de losse id-lijst uit, zodat je vanaf je telefoon kunt zien welke rijen
-     rommel zijn zonder de sheet in te duiken. Werkt alleen als het Apps Script het
-     format 'devices' kent; zo niet, dan blijft dit blok gewoon onzichtbaar. */
+     Leest de losse id-lijst uit. Werkt alleen als het Apps Script het format 'devices'
+     kent; zo niet, dan blijft dit blok gewoon onzichtbaar.
+
+     Tot 27 okt 2026 noemde dit blok elk toestel dat vandaag niet pingde "kandidaat om op
+     te ruimen". Dat was verkeerd: een toestel dat stopt is een afhaker, en die hoort
+     juist in de noemer van de retentie (PRODUCT-DIRECTION.md, sectie 6). Nu staat er
+     actief of gestopt, en uitsluiten gebeurt alleen in Code.gs, met een vastgelegde reden. */
   const JUNK = ['m1','mdemo','mdemo1'];
   const devBox = document.getElementById('devices');
 
@@ -319,16 +323,19 @@
     const mine = PLAT === 'all' ? list : list.filter(d => (d.p || 'android') === PLAT);
     if (!mine.length) { devBox.innerHTML=''; return; }
     const rows = mine.slice().sort((a,b)=> (a.last < b.last ? 1 : -1)).slice(0,80);
-    const stale = rows.filter(d => JUNK.indexOf(d.id) >= 0 || d.last !== t).length;
+    const ago = (day) => Math.round((new Date(t + 'T00:00:00') - new Date(day + 'T00:00:00')) / 864e5);
+    const isActive = (d) => JUNK.indexOf(d.id) < 0 && ago(d.last) <= 7;
+    const active = rows.filter(isActive).length;
     devBox.innerHTML =
       '<div class="card full" style="margin-top:14px">' +
         '<div class="ey">Toestellen, nieuwste eerst</div>' +
         '<div class="hint" style="margin-top:8px">' + rows.length + ' id\'s. ' +
-          (stale ? '<b>' + stale + '</b> zijn vandaag niet gezien of komen uit een test, en zijn kandidaat om op te ruimen.' : 'Alles is vandaag gezien.') +
+          '<b>' + active + '</b> actief in de laatste 7 dagen, ' + (rows.length - active) + ' gestopt. ' +
+          'Gestopte toestellen blijven bewust meetellen: dat is de uitval die de retentie moet laten zien.' +
         '</div>' +
         '<div style="margin-top:12px">' +
         rows.map(function(d){
-          const junk = JUNK.indexOf(d.id) >= 0 || d.last !== t;
+          const junk = !isActive(d);
           return '<div style="display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid var(--line);font-size:12.5px' +
             (junk ? ';opacity:.55' : '') + '">' +
             '<span style="font-family:monospace">' + esc(d.id) + (junk ? ' ●' : '') +
